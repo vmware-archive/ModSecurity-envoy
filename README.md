@@ -8,15 +8,23 @@ this Envoy version and Enable ModSecurity-Envoy Filter on all pods or on the mos
 
 ## Prerequisites
 
-This repo use git-lfs so please install it from [here](https://git-lfs.github.com/)
+* This repo use git-lfs so please install it from [here](https://git-lfs.github.com/) before `git clone`
+* [Bazel](https://docs.bazel.build/versions/master/install-ubuntu.html#install-with-installer-ubuntu)
+
+```bash
+sudo apt-get install -y libtool cmake realpath clang-format-5.0 automake 
+sudo apt-get install -y g++ flex bison curl doxygen libyajl-dev libgeoip-dev libtool dh-autoreconf libcurl4-gnutls-dev libxml2 libpcre++-dev libxml2-dev
+```
 
 ## Building
 
 To build the envoy static binary with ModSecurity-Envoy filter:
 
 ```bash
+git clone git@github.com:octarinesec/ModSecurity-envoy.git
+cd ModSecurity-envoy
 git submodule update --init
-bazel build //http-filter-modsecurity:envoy
+bazel build //http-filter-modsecurity:envoy # sometimes the build timesout and you should rerun it
 ```
 
 Download OWASP ModSecurity Core Rule Set (CRS). CRS is a set of generic attack
