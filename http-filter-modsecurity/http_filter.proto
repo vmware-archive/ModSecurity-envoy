@@ -1,0 +1,9 @@
+syntax = "proto3";
+
+package modsecurity;
+
+import "validate/validate.proto";
+
+message Decoder {
+    string rules = 1 [(validate.rules).string.min_bytes = 1];
+}

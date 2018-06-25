@@ -1,0 +1,46 @@
+static_resources:
+  listeners:
+  - address:
+      socket_address:
+        address: 0.0.0.0
+        port_value: 8585
+    filter_chains:
+    - filters:
+      - name: envoy.http_connection_manager
+        config:
+          codec_type: auto
+          stat_prefix: ingress_http
+          route_config:
+            name: local_route
+            virtual_hosts:
+            - name: backend
+              domains:
+              - "*"
+              routes:
+              - match:
+                  prefix: "/"
+                route:
+                  cluster: service1
+          http_filters:
+          - name: modsecurity          # before envoy.router because order matters!
+            config:
+             rules: modsecurity-example.conf
+          - name: envoy.router
+            config: {}
+          - name: envoy.router
+            config: {}
+  clusters:
+  - name: service1
+    connect_timeout: 8s
+    type: logical_dns
+    lb_policy: round_robin
+    hosts:
+    - socket_address:
+        address: 127.0.0.1
+        port_value: 5555
+admin:
+  access_log_path: "/dev/null"
+  address:
+    socket_address:
+      address: 0.0.0.0
+      port_value: 8001
