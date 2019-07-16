@@ -1,53 +1,27 @@
 #include <cstdlib>
-
-#include "common/common/logger.h"
-#include "common/common/stack_array.h"
-#include "common/http/utility.h"
-
 #include <string>
 #include <vector>
+#include <iostream>
 
 #include "http_filter.h"
 
+#include "common/common/stack_array.h"
+#include "common/http/utility.h"
+
 #include "envoy/server/filter_config.h"
-#include <iostream>
 
 #include "modsecurity/rule_message.h"
 
 namespace Envoy {
 namespace Http {
 
-static void logCb(void *data, const void *ruleMessagev) {
-    if (ruleMessagev == nullptr) {
-        std::cout << "I've got a call but the message was null ;(";
-        std::cout << std::endl;
-        return;
-    }
-
-    const modsecurity::RuleMessage *ruleMessage = reinterpret_cast<const modsecurity::RuleMessage *>(ruleMessagev);
-    std::cout << "Rule Id: " << std::to_string(ruleMessage->m_ruleId);
-    std::cout << " phase: " << std::to_string(ruleMessage->m_phase);
-    std::cout << std::endl;
-    if (ruleMessage->m_isDisruptive) {
-        std::cout << " * Disruptive action: ";
-        std::cout << modsecurity::RuleMessage::log(ruleMessage);
-        std::cout << std::endl;
-        std::cout << " ** %d is meant to be informed by the webserver.";
-        std::cout << std::endl;
-    } else {
-        std::cout << " * Match, but no disruptive action: ";
-        std::cout << modsecurity::RuleMessage::log(ruleMessage);
-        std::cout << std::endl;
-    }
-}
-
 HttpModSecurityFilterConfig::HttpModSecurityFilterConfig(
     const modsecurity::Decoder& proto_config)
     : rules_(proto_config.rules()) {
     modsec_.reset(new modsecurity::ModSecurity());
     modsec_->setConnectorInformation("ModSecurity-test v0.0.1-alpha (ModSecurity test)");
-    modsec_->setServerLogCb(logCb, modsecurity::RuleMessageLogProperty
-                                  | modsecurity::IncludeFullHighlightLogProperty);
+    modsec_->setServerLogCb(HttpModSecurityFilter::_logCb, modsecurity::RuleMessageLogProperty |
+                                    modsecurity::IncludeFullHighlightLogProperty);
 
     modsec_rules_.reset(new modsecurity::Rules());
     modsec_rules_->loadFromUri(rules().c_str());
@@ -55,7 +29,7 @@ HttpModSecurityFilterConfig::HttpModSecurityFilterConfig(
 
 HttpModSecurityFilter::HttpModSecurityFilter(HttpModSecurityFilterConfigSharedPtr config)
     : config_(config), intervined_(false) {
-    modsecTransaction_.reset(new modsecurity::Transaction(config_->modsec_.get(), config_->modsec_rules_.get(), nullptr));
+    modsecTransaction_.reset(new modsecurity::Transaction(config_->modsec_.get(), config_->modsec_rules_.get(), this));
 }
 
 HttpModSecurityFilter::~HttpModSecurityFilter() {
@@ -169,18 +143,15 @@ FilterDataStatus HttpModSecurityFilter::encodeData(Buffer::Instance& data, bool)
 }
 
 FilterTrailersStatus HttpModSecurityFilter::encodeTrailers(HeaderMap&) {
-    std::cout << "encodeTrailers" << std::endl;
     return FilterTrailersStatus::Continue;
 }
 
 
 FilterMetadataStatus HttpModSecurityFilter::encodeMetadata(MetadataMap& metadata_map) {
-    std::cout << "encodeMetadata" << std::endl;
     return FilterMetadataStatus::Continue;
 }
 
 void HttpModSecurityFilter::setEncoderFilterCallbacks(StreamEncoderFilterCallbacks& callbacks) {
-    std::cout << "setEncoderFilterCallbacks" << std::endl;
     encoder_callbacks_ = &callbacks;
 }
 
@@ -188,11 +159,34 @@ bool HttpModSecurityFilter::intervention() {
     if (!intervined_ && modsecTransaction_->m_it.disruptive) {
         // intervined_ must be set to true before sendLocalReply to avoid reentrancy when encoding the reply
         intervined_ = true;
-        decoder_callbacks_->sendLocalReply(Code::Forbidden, "ModSecurity Action\n",
+        decoder_callbacks_->sendLocalReply(static_cast<Http::Code>(modsecTransaction_->m_it.status), 
+                                           "ModSecurity Action\n",
                                            [](Http::HeaderMap& headers) {
                                            }, absl::nullopt, "");
     }
     return intervined_;
+}
+
+void HttpModSecurityFilter::_logCb(void *data, const void *ruleMessagev) {
+    auto filter_ = reinterpret_cast<HttpModSecurityFilter*>(data);
+    auto ruleMessage = reinterpret_cast<const modsecurity::RuleMessage *>(ruleMessagev);
+
+    filter_->logCb(ruleMessage);
+}
+
+
+void HttpModSecurityFilter::logCb(const modsecurity::RuleMessage * ruleMessage) {
+    if (ruleMessage == nullptr) {
+        ENVOY_LOG(error, "ruleMessage == nullptr");
+        return;
+    }
+    
+    ENVOY_LOG(info, "Rule Id: {} phase: {}",
+                    ruleMessage->m_ruleId,
+                    ruleMessage->m_phase);
+    ENVOY_LOG(info, "* {} action. {}",
+                    ruleMessage->m_isDisruptive ? "Disruptive" : "Non-disruptive",
+                    modsecurity::RuleMessage::log(ruleMessage));
 }
 
 } // namespace Http

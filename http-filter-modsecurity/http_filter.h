@@ -4,6 +4,7 @@
 
 #include <string>
 
+#include "common/common/logger.h"
 #include "envoy/server/filter_config.h"
 
 #include "http-filter-modsecurity/http_filter.pb.h"
@@ -31,8 +32,14 @@ private:
 
 typedef std::shared_ptr<HttpModSecurityFilterConfig> HttpModSecurityFilterConfigSharedPtr;
 
-class HttpModSecurityFilter : public StreamFilter {
+class HttpModSecurityFilter : public StreamFilter,
+                              public Logger::Loggable<Logger::Id::filter> {
 public:
+  /**
+   * This static function will be called by modsecurity and internally invoke logCb filter's method
+   */
+  static void _logCb(void* data, const void* ruleMessagev);
+
     HttpModSecurityFilter(HttpModSecurityFilterConfigSharedPtr);
   ~HttpModSecurityFilter();
 
@@ -59,7 +66,8 @@ private:
   StreamDecoderFilterCallbacks* decoder_callbacks_;
   StreamEncoderFilterCallbacks* encoder_callbacks_;
   std::shared_ptr<modsecurity::Transaction> modsecTransaction_;
-
+  
+  void logCb(const modsecurity::RuleMessage * ruleMessage);
   /**
    * @return true if intervention of current transaction is disruptive, false otherwise
    */

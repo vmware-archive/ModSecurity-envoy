@@ -27,8 +27,6 @@ static_resources:
              rules: modsecurity-example.conf
           - name: envoy.router
             config: {}
-          - name: envoy.router
-            config: {}
   clusters:
   - name: service1
     connect_timeout: 8s
