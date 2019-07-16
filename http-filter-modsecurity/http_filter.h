@@ -21,8 +21,8 @@ public:
 
   const std::string& rules() const { return rules_; }
 
-  modsecurity::ModSecurity *modsec;
-  modsecurity::Rules * modsec_rules;
+  std::shared_ptr<modsecurity::ModSecurity> modsec_;
+  std::shared_ptr<modsecurity::Rules> modsec_rules_;
 
 private:
   const std::string rules_;
@@ -51,12 +51,25 @@ public:
   FilterDataStatus encodeData(Buffer::Instance&, bool) override;
   FilterTrailersStatus encodeTrailers(HeaderMap&) override;
   void setEncoderFilterCallbacks(StreamEncoderFilterCallbacks&) override;
+  FilterMetadataStatus encodeMetadata(MetadataMap& metadata_map) override;
+
 
 private:
   const HttpModSecurityFilterConfigSharedPtr config_;
   StreamDecoderFilterCallbacks* decoder_callbacks_;
   StreamEncoderFilterCallbacks* encoder_callbacks_;
-  modsecurity::Transaction * modsecTransaction;
+  std::shared_ptr<modsecurity::Transaction> modsecTransaction_;
+
+  /**
+   * @return true if intervention of current transaction is disruptive, false otherwise
+   */
+  bool intervention();
+
+  // This bool is set by intervention before generating a local reply.
+  // Once set, it means that for this http session is already intervined and any subsequent call to the filter's methods
+  // will return ::Continue.
+  // This is to allow the local reply to flow back to the downstream.
+  bool intervined_;
 };
 
 

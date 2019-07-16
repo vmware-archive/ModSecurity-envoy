@@ -1,7 +1,10 @@
 #include <cstdlib>
 
 #include "common/common/logger.h"
+#include "common/common/stack_array.h"
+
 #include <string>
+#include <vector>
 
 #include "http_filter.h"
 
@@ -10,14 +13,11 @@
 
 #include "modsecurity/rule_message.h"
 
-
-using namespace std;
-
 namespace Envoy {
 namespace Http {
 
 static void logCb(void *data, const void *ruleMessagev) {
-    if (ruleMessagev == NULL) {
+    if (ruleMessagev == nullptr) {
         std::cout << "I've got a call but the message was null ;(";
         std::cout << std::endl;
         return;
@@ -43,65 +43,66 @@ static void logCb(void *data, const void *ruleMessagev) {
 HttpModSecurityFilterConfig::HttpModSecurityFilterConfig(
     const modsecurity::Decoder& proto_config)
     : rules_(proto_config.rules()) {
-    this->modsec = new modsecurity::ModSecurity();
-    this->modsec->setConnectorInformation("ModSecurity-test v0.0.1-alpha (ModSecurity test)");
-    this->modsec->setServerLogCb(logCb, modsecurity::RuleMessageLogProperty
+    modsec_.reset(new modsecurity::ModSecurity());
+    modsec_->setConnectorInformation("ModSecurity-test v0.0.1-alpha (ModSecurity test)");
+    modsec_->setServerLogCb(logCb, modsecurity::RuleMessageLogProperty
                                   | modsecurity::IncludeFullHighlightLogProperty);
 
-    this->modsec_rules = new modsecurity::Rules();
-    this->modsec_rules->loadFromUri(this->rules().c_str());
+    modsec_rules_.reset(new modsecurity::Rules());
+    modsec_rules_->loadFromUri(rules().c_str());
 }
 
 HttpModSecurityFilter::HttpModSecurityFilter(HttpModSecurityFilterConfigSharedPtr config)
-    : config_(config) {
-    modsecTransaction = new modsecurity::Transaction(this->config_->modsec, this->config_->modsec_rules, NULL);
+    : config_(config), intervined_(false) {
+    modsecTransaction_.reset(new modsecurity::Transaction(config_->modsec_.get(), config_->modsec_rules_.get(), nullptr));
 }
 
 HttpModSecurityFilter::~HttpModSecurityFilter() {
-    delete this->modsecTransaction;
-    this->modsecTransaction = NULL;
 }
 
 HttpModSecurityFilterConfig::~HttpModSecurityFilterConfig() {
-    delete this->modsec;
-    this->modsec = NULL;
-//  TODO: check why this is segfaulting.
-//  delete this->modsec_rules;
-//  this->modsec_rules = NULL;
 }
 
 void HttpModSecurityFilter::onDestroy() {
-    this->modsecTransaction->processLogging();
+    modsecTransaction_->processLogging();
 }
 
-
 FilterHeadersStatus HttpModSecurityFilter::decodeHeaders(HeaderMap& headers, bool) {
-  const char * uri = headers.get(LowerCaseString(":path"))->value().c_str();
-  const char * method = headers.get(LowerCaseString(":method"))->value().c_str();
-  this->modsecTransaction->processURI(uri, method, "1.1");
-  headers.iterate(
-          [](const HeaderEntry& header, void* context) -> HeaderMap::Iterate {
-            static_cast<HttpModSecurityFilter*>(context)->modsecTransaction->addRequestHeader(
-                    header.key().c_str(),
-                    header.value().c_str()
-            );
-            return HeaderMap::Iterate::Continue;
-            },
-            this);
-  this->modsecTransaction->processRequestHeaders();
-  return FilterHeadersStatus::Continue;
+    if (intervined_) {
+        return FilterHeadersStatus::Continue;
+    }
+    auto uri = headers.get(LowerCaseString(":path"));
+    auto method = headers.get(LowerCaseString(":method"));
+    // TODO - dynamically determine by connection if HTTP/1.1. or HTTP/2?
+    modsecTransaction_->processURI(std::string(uri->value().getStringView()).c_str(), 
+                                    std::string(method->value().getStringView()).c_str(), 
+                                    "1.1");
+    headers.iterate(
+            [](const HeaderEntry& header, void* context) -> HeaderMap::Iterate {
+                static_cast<HttpModSecurityFilter*>(context)->modsecTransaction_->addRequestHeader(
+                        std::string(header.key().getStringView()).c_str(),
+                        std::string(header.value().getStringView()).c_str()
+                );
+                return HeaderMap::Iterate::Continue;
+                },
+                this);
+    modsecTransaction_->processRequestHeaders();
+    return intervention() ? FilterHeadersStatus::StopAllIterationAndBuffer : FilterHeadersStatus::Continue;
 }
 
 FilterDataStatus HttpModSecurityFilter::decodeData(Buffer::Instance& data, bool) {
-  const size_t length = data.length();
-  unsigned char * buffer = new unsigned char[length]();
-
-  // TODO: avoid duplicate copy
-  data.copyOut(0, length, buffer);
-  this->modsecTransaction->appendRequestBody(buffer, length);
-  this->modsecTransaction->processRequestBody();
-  delete buffer;
-  return FilterDataStatus::Continue;
+    if (intervined_) {
+        return FilterDataStatus::Continue;
+    }
+    uint64_t num_slices = data.getRawSlices(nullptr, 0);
+    STACK_ARRAY(slices, Buffer::RawSlice, num_slices);
+    data.getRawSlices(slices.begin(), num_slices);
+    
+    for (const Buffer::RawSlice& slice : slices) {
+        modsecTransaction_->appendRequestBody(static_cast<unsigned char*>(slice.mem_), slice.len_);
+    }
+    modsecTransaction_->processRequestBody();
+    return intervention() ? FilterDataStatus::StopIterationAndBuffer : FilterDataStatus::Continue;
 }
 
 FilterTrailersStatus HttpModSecurityFilter::decodeTrailers(HeaderMap&) {
@@ -114,18 +115,22 @@ void HttpModSecurityFilter::setDecoderFilterCallbacks(StreamDecoderFilterCallbac
 
 
 FilterHeadersStatus HttpModSecurityFilter::encodeHeaders(HeaderMap& headers, bool) {
-    int code = atoi(headers.get(LowerCaseString(":status"))->value().c_str());
+    if (intervined_) {
+        return FilterHeadersStatus::Continue;
+    }
+    auto status = headers.get(LowerCaseString(":status"));
+    int code = atoi(std::string(status->value().getStringView()).c_str());
     headers.iterate(
             [](const HeaderEntry& header, void* context) -> HeaderMap::Iterate {
-                static_cast<HttpModSecurityFilter*>(context)->modsecTransaction->addResponseHeader(
-                        header.key().c_str(),
-                        header.value().c_str()
+                static_cast<HttpModSecurityFilter*>(context)->modsecTransaction_->addResponseHeader(
+                    std::string(header.key().getStringView()).c_str(),
+                    std::string(header.value().getStringView()).c_str()
                 );
                 return HeaderMap::Iterate::Continue;
             },
             this);
-    this->modsecTransaction->processResponseHeaders(code, "1.1");
-    return FilterHeadersStatus::Continue;
+    modsecTransaction_->processResponseHeaders(code, "1.1");
+    return intervention() ? FilterHeadersStatus::StopAllIterationAndBuffer : FilterHeadersStatus::Continue;
 }
 
 FilterHeadersStatus HttpModSecurityFilter::encode100ContinueHeaders(HeaderMap& headers) {
@@ -133,25 +138,46 @@ FilterHeadersStatus HttpModSecurityFilter::encode100ContinueHeaders(HeaderMap& h
 }
 
 FilterDataStatus HttpModSecurityFilter::encodeData(Buffer::Instance& data, bool) {
-    const size_t length = data.length();
-    unsigned char * buffer = new unsigned char[length]();
-
-    // TODO: avoid duplicate copy
-    data.copyOut(0, length, buffer);
-    this->modsecTransaction->appendResponseBody(buffer, length);
-    this->modsecTransaction->processResponseBody();
-    delete buffer;
-    return FilterDataStatus::Continue;
+    if (intervined_) {
+        return FilterDataStatus::Continue;
+    }
+    
+    uint64_t num_slices = data.getRawSlices(nullptr, 0);
+    STACK_ARRAY(slices, Buffer::RawSlice, num_slices);
+    data.getRawSlices(slices.begin(), num_slices);
+    
+    for (const Buffer::RawSlice& slice : slices) {
+        modsecTransaction_->appendResponseBody(static_cast<unsigned char*>(slice.mem_), slice.len_);
+    }
+    modsecTransaction_->processResponseBody();
+    return intervention() ? FilterDataStatus::StopIterationAndBuffer : FilterDataStatus::Continue;
 }
 
 FilterTrailersStatus HttpModSecurityFilter::encodeTrailers(HeaderMap&) {
-    cout << "encodeTrailers" << endl;
+    std::cout << "encodeTrailers" << std::endl;
     return FilterTrailersStatus::Continue;
 }
 
+
+FilterMetadataStatus HttpModSecurityFilter::encodeMetadata(MetadataMap& metadata_map) {
+    std::cout << "encodeMetadata" << std::endl;
+    return FilterMetadataStatus::Continue;
+}
+
 void HttpModSecurityFilter::setEncoderFilterCallbacks(StreamEncoderFilterCallbacks& callbacks) {
-    cout << "setEncoderFilterCallbacks" << endl;
+    std::cout << "setEncoderFilterCallbacks" << std::endl;
     encoder_callbacks_ = &callbacks;
+}
+
+bool HttpModSecurityFilter::intervention() {
+    if (!intervined_ && modsecTransaction_->m_it.disruptive) {
+        // intervined_ must be set to true before sendLocalReply to avoid reentrancy when encoding the reply
+        intervined_ = true;
+        decoder_callbacks_->sendLocalReply(Code::Forbidden, "ModSecurity Action\n",
+                                           [](Http::HeaderMap& headers) {
+                                           }, absl::nullopt, "");
+    }
+    return intervined_;
 }
 
 } // namespace Http
