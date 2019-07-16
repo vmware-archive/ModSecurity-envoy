@@ -2,6 +2,7 @@
 
 #include "common/common/logger.h"
 #include "common/common/stack_array.h"
+#include "common/http/utility.h"
 
 #include <string>
 #include <vector>
@@ -67,16 +68,28 @@ void HttpModSecurityFilter::onDestroy() {
     modsecTransaction_->processLogging();
 }
 
+const char* getProtocolString(const Protocol protocol) {
+    switch (protocol) {
+    case Protocol::Http10:
+        return "1.0";
+    case Protocol::Http11:
+        return "1.1";
+    case Protocol::Http2:
+        return "2.0";
+    }
+  NOT_REACHED_GCOVR_EXCL_LINE;
+}
+
 FilterHeadersStatus HttpModSecurityFilter::decodeHeaders(HeaderMap& headers, bool) {
     if (intervined_) {
         return FilterHeadersStatus::Continue;
     }
-    auto uri = headers.get(LowerCaseString(":path"));
-    auto method = headers.get(LowerCaseString(":method"));
-    // TODO - dynamically determine by connection if HTTP/1.1. or HTTP/2?
+    auto uri = headers.Path();
+    auto method = headers.Method();
+
     modsecTransaction_->processURI(std::string(uri->value().getStringView()).c_str(), 
-                                    std::string(method->value().getStringView()).c_str(), 
-                                    "1.1");
+                                    std::string(method->value().getStringView()).c_str(),
+                                    getProtocolString(decoder_callbacks_->streamInfo().protocol().value_or(Protocol::Http11)));
     headers.iterate(
             [](const HeaderEntry& header, void* context) -> HeaderMap::Iterate {
                 static_cast<HttpModSecurityFilter*>(context)->modsecTransaction_->addRequestHeader(
@@ -118,8 +131,8 @@ FilterHeadersStatus HttpModSecurityFilter::encodeHeaders(HeaderMap& headers, boo
     if (intervined_) {
         return FilterHeadersStatus::Continue;
     }
-    auto status = headers.get(LowerCaseString(":status"));
-    int code = atoi(std::string(status->value().getStringView()).c_str());
+    auto status = headers.Status();
+    uint64_t code = Utility::getResponseStatus(headers);
     headers.iterate(
             [](const HeaderEntry& header, void* context) -> HeaderMap::Iterate {
                 static_cast<HttpModSecurityFilter*>(context)->modsecTransaction_->addResponseHeader(
@@ -129,7 +142,9 @@ FilterHeadersStatus HttpModSecurityFilter::encodeHeaders(HeaderMap& headers, boo
                 return HeaderMap::Iterate::Continue;
             },
             this);
-    modsecTransaction_->processResponseHeaders(code, "1.1");
+    modsecTransaction_->processResponseHeaders(code, 
+            getProtocolString(encoder_callbacks_->streamInfo().protocol().value_or(Protocol::Http11)));
+        
     return intervention() ? FilterHeadersStatus::StopAllIterationAndBuffer : FilterHeadersStatus::Continue;
 }
 
