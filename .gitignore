@@ -1,9 +1,5 @@
 bazel-*
 .idea
 owasp-modsecurity*
-v3.0.2.tar.gz
-nikto-master
-master.zip
-crs-setup.conf
 .project
 .vscode

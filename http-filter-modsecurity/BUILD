@@ -25,32 +25,27 @@ api_proto_library(
     srcs = ["http_filter.proto"]
 )
 
-cc_import(
-    name = "libmodsecurity",
-    static_library = "libmodsecurity.a"
-)
-
 envoy_cc_library(
     name = "http_filter_lib",
-    copts=["-Wno-unused-function", "-Wno-unused-parameter", "-Wno-reorder", "-Wno-unused-variable"],
+    copts=["-Wno-unused-function", "-Wno-unused-parameter", "-Wno-reorder", "-Wno-unused-variable", "-Imodsecurity/include"],
     srcs = ["http_filter.cc"],
-    hdrs = glob(["http_filter.h", "modsecurity/**"]),
+    hdrs = glob(["http_filter.h"]),
     repository = "@envoy",
     deps = [
         ":http_filter_proto_cc",
         "@envoy//source/exe:envoy_common_lib",
-        ":libmodsecurity"
+        "//:libmodsecurity",
     ],
 )
 
 envoy_cc_library(
     name = "http_filter_config",
     srcs = ["http_filter_config.cc"],
-    copts=["-Wno-unused-function", "-Wno-unused-parameter", "-Wno-reorder", "-Wno-unused-variable"],
+    copts=["-Wno-unused-function", "-Wno-unused-parameter", "-Wno-reorder", "-Wno-unused-variable", "-Imodsecurity/include"],
     repository = "@envoy",
     deps = [
         ":http_filter_lib",
-        "@envoy//include/envoy/server:filter_config_interface",
+        "@envoy//include/envoy/server:filter_config_interface"
     ],
 )
 

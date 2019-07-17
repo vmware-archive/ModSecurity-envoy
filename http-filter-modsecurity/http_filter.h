@@ -15,7 +15,7 @@
 namespace Envoy {
 namespace Http {
 
-class HttpModSecurityFilterConfig {
+class HttpModSecurityFilterConfig : public Logger::Loggable<Logger::Id::filter> {
 public:
   HttpModSecurityFilterConfig(const modsecurity::Decoder& proto_config);
   ~HttpModSecurityFilterConfig();

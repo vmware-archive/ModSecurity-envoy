@@ -42,6 +42,13 @@ envoy_cc_library(
     ],
 )
 
+cc_import(
+    name = "libmodsecurity",
+    hdrs = glob(["modsecurity/include/**"]),
+    static_library = "modsecurity/libmodsecurity.a",
+    visibility = ["//visibility:public"]
+)
+
 envoy_cc_test(
     name = "echo2_integration_test",
     srcs = ["echo2_integration_test.cc"],

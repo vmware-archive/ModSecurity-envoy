@@ -7,6 +7,7 @@
 
 #include "common/common/stack_array.h"
 #include "common/http/utility.h"
+#include "common/http/headers.h"
 
 #include "envoy/server/filter_config.h"
 
@@ -21,10 +22,16 @@ HttpModSecurityFilterConfig::HttpModSecurityFilterConfig(
     modsec_.reset(new modsecurity::ModSecurity());
     modsec_->setConnectorInformation("ModSecurity-test v0.0.1-alpha (ModSecurity test)");
     modsec_->setServerLogCb(HttpModSecurityFilter::_logCb, modsecurity::RuleMessageLogProperty |
-                                    modsecurity::IncludeFullHighlightLogProperty);
+                                                           modsecurity::IncludeFullHighlightLogProperty);
 
     modsec_rules_.reset(new modsecurity::Rules());
-    modsec_rules_->loadFromUri(rules().c_str());
+    int rulesLoaded = modsec_rules_->loadFromUri(rules().c_str());
+    ENVOY_LOG(info, "Loading ModSecurity config from {}", rules());
+    if (rulesLoaded == -1) {
+        ENVOY_LOG(error, "Failed to load rules!");
+    } else {
+        ENVOY_LOG(info, "Loaded {} rules", rulesLoaded);
+    };
 }
 
 HttpModSecurityFilter::HttpModSecurityFilter(HttpModSecurityFilterConfigSharedPtr config)
@@ -58,23 +65,52 @@ FilterHeadersStatus HttpModSecurityFilter::decodeHeaders(HeaderMap& headers, boo
     if (intervined_) {
         return FilterHeadersStatus::Continue;
     }
+    auto downstreamAddress = decoder_callbacks_->streamInfo().downstreamLocalAddress();
+    // TODO - Upstream is (always?) still not resolved in this stage. Use our local proxy's ip. Is this what we want?
+    ASSERT(decoder_callbacks_->connection() != nullptr);
+    auto localAddress = decoder_callbacks_->connection()->localAddress();
+    // According to documentation, downstreamAddress should never be nullptr
+    ASSERT(downstreamAddress != nullptr);
+    ASSERT(downstreamAddress->type() == Network::Address::Type::Ip);
+    ASSERT(localAddress != nullptr);
+    ASSERT(localAddress->type() == Network::Address::Type::Ip);
+    modsecTransaction_->processConnection(downstreamAddress->ip()->addressAsString().c_str(), 
+                                          downstreamAddress->ip()->port(),
+                                          localAddress->ip()->addressAsString().c_str(), 
+                                          localAddress->ip()->port());
+    if (intervention()) {
+        return FilterHeadersStatus::StopAllIterationAndBuffer;
+    }
+
     auto uri = headers.Path();
     auto method = headers.Method();
-
     modsecTransaction_->processURI(std::string(uri->value().getStringView()).c_str(), 
                                     std::string(method->value().getStringView()).c_str(),
                                     getProtocolString(decoder_callbacks_->streamInfo().protocol().value_or(Protocol::Http11)));
+    if (intervention()) {
+        return FilterHeadersStatus::StopAllIterationAndBuffer;
+    }
+    
     headers.iterate(
             [](const HeaderEntry& header, void* context) -> HeaderMap::Iterate {
-                static_cast<HttpModSecurityFilter*>(context)->modsecTransaction_->addRequestHeader(
-                        std::string(header.key().getStringView()).c_str(),
-                        std::string(header.value().getStringView()).c_str()
-                );
+                
+                std::string k = std::string(header.key().getStringView());
+                std::string v = std::string(header.value().getStringView());
+                static_cast<HttpModSecurityFilter*>(context)->modsecTransaction_->addRequestHeader(k.c_str(), v.c_str());
+                // TODO - does this special case makes sense? it doesn't exist on apache/nginx modsecurity bridges.
+                // host header is cannonized to :authority even on http older than 2 
+                // see https://github.com/envoyproxy/envoy/issues/2209
+                if (k == Headers::get().Host.get()) {
+                    static_cast<HttpModSecurityFilter*>(context)->modsecTransaction_->addRequestHeader(Headers::get().HostLegacy.get().c_str(), v.c_str());
+                }
                 return HeaderMap::Iterate::Continue;
-                },
-                this);
+            },
+            this);
     modsecTransaction_->processRequestHeaders();
-    return intervention() ? FilterHeadersStatus::StopAllIterationAndBuffer : FilterHeadersStatus::Continue;
+    if (intervention()) {
+        return FilterHeadersStatus::StopAllIterationAndBuffer;
+    }
+    return FilterHeadersStatus::Continue;
 }
 
 FilterDataStatus HttpModSecurityFilter::decodeData(Buffer::Instance& data, bool) {
@@ -185,6 +221,8 @@ void HttpModSecurityFilter::logCb(const modsecurity::RuleMessage * ruleMessage) 
                     ruleMessage->m_ruleId,
                     ruleMessage->m_phase);
     ENVOY_LOG(info, "* {} action. {}",
+                    // Note - since ModSecurity >= v3.0.3 disruptive actions do not invoke the callback
+                    // see https://github.com/SpiderLabs/ModSecurity/commit/91daeee9f6a61b8eda07a3f77fc64bae7c6b7c36
                     ruleMessage->m_isDisruptive ? "Disruptive" : "Non-disruptive",
                     modsecurity::RuleMessage::log(ruleMessage));
 }
