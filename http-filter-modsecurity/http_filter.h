@@ -32,6 +32,22 @@ private:
 
 typedef std::shared_ptr<HttpModSecurityFilterConfig> HttpModSecurityFilterConfigSharedPtr;
 
+/**
+ * Transaction flow:
+ * 1. Disruptive?
+ *   a. StopIterationAndBuffer until finished processing request
+ *      a1. Should block? sendLocalReply
+ *           decode should return StopIteration to avoid sending data to upstream.
+ *           encode should return Continue to let local reply flow back to downstream.
+ *      a2. Request is valid
+ *           decode should return Continue to let request flow upstream.
+ *           encode should return StopIterationAndBuffer until finished processing response
+ *               a2a. Should block? goto a1.
+ *               a2b. Response is valid, return Continue
+ * 
+ * 2. Non-disruptive - always return Continue
+ *   
+ */
 class HttpModSecurityFilter : public StreamFilter,
                               public Logger::Loggable<Logger::Id::filter> {
 public:
@@ -73,11 +89,20 @@ private:
    */
   bool intervention();
 
+  FilterHeadersStatus getRequestHeadersStatus();
+  FilterDataStatus getRequestStatus();
+
+  FilterHeadersStatus getResponseHeadersStatus();
+  FilterDataStatus getResponseStatus();
+
   // This bool is set by intervention before generating a local reply.
   // Once set, it means that for this http session is already intervined and any subsequent call to the filter's methods
   // will return ::Continue.
   // This is to allow the local reply to flow back to the downstream.
   bool intervined_;
+  bool requestProcessed_;
+  bool responseProcessed_;
+  // TODO - convert three booleans to state?
 };
 
 
