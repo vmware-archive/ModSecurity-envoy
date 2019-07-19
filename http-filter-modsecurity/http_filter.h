@@ -47,15 +47,15 @@ public:
   void onDestroy() override;
 
   // Http::StreamDecoderFilter
-  FilterHeadersStatus decodeHeaders(HeaderMap&, bool) override;
-  FilterDataStatus decodeData(Buffer::Instance&, bool) override;
+  FilterHeadersStatus decodeHeaders(HeaderMap&, bool end_stream) override;
+  FilterDataStatus decodeData(Buffer::Instance&, bool end_stream) override;
   FilterTrailersStatus decodeTrailers(HeaderMap&) override;
   void setDecoderFilterCallbacks(StreamDecoderFilterCallbacks&) override;
 
   // Http::StreamEncoderFilter
   FilterHeadersStatus encode100ContinueHeaders(HeaderMap& headers) override;
-  FilterHeadersStatus encodeHeaders(HeaderMap&, bool) override;
-  FilterDataStatus encodeData(Buffer::Instance&, bool) override;
+  FilterHeadersStatus encodeHeaders(HeaderMap&, bool end_stream) override;
+  FilterDataStatus encodeData(Buffer::Instance&, bool end_stream) override;
   FilterTrailersStatus encodeTrailers(HeaderMap&) override;
   void setEncoderFilterCallbacks(StreamEncoderFilterCallbacks&) override;
   FilterMetadataStatus encodeMetadata(MetadataMap& metadata_map) override;

@@ -61,7 +61,7 @@ const char* getProtocolString(const Protocol protocol) {
   NOT_REACHED_GCOVR_EXCL_LINE;
 }
 
-FilterHeadersStatus HttpModSecurityFilter::decodeHeaders(HeaderMap& headers, bool) {
+FilterHeadersStatus HttpModSecurityFilter::decodeHeaders(HeaderMap& headers, bool end_stream) {
     if (intervined_) {
         return FilterHeadersStatus::Continue;
     }
@@ -113,18 +113,20 @@ FilterHeadersStatus HttpModSecurityFilter::decodeHeaders(HeaderMap& headers, boo
     return FilterHeadersStatus::Continue;
 }
 
-FilterDataStatus HttpModSecurityFilter::decodeData(Buffer::Instance& data, bool) {
+FilterDataStatus HttpModSecurityFilter::decodeData(Buffer::Instance& data, bool end_stream) {
     if (intervined_) {
         return FilterDataStatus::Continue;
     }
+
     uint64_t num_slices = data.getRawSlices(nullptr, 0);
     STACK_ARRAY(slices, Buffer::RawSlice, num_slices);
     data.getRawSlices(slices.begin(), num_slices);
-    
     for (const Buffer::RawSlice& slice : slices) {
         modsecTransaction_->appendRequestBody(static_cast<unsigned char*>(slice.mem_), slice.len_);
     }
-    modsecTransaction_->processRequestBody();
+    if (end_stream) {
+        modsecTransaction_->processRequestBody();
+    }
     return intervention() ? FilterDataStatus::StopIterationAndBuffer : FilterDataStatus::Continue;
 }
 
@@ -137,7 +139,7 @@ void HttpModSecurityFilter::setDecoderFilterCallbacks(StreamDecoderFilterCallbac
 }
 
 
-FilterHeadersStatus HttpModSecurityFilter::encodeHeaders(HeaderMap& headers, bool) {
+FilterHeadersStatus HttpModSecurityFilter::encodeHeaders(HeaderMap& headers, bool end_stream) {
     if (intervined_) {
         return FilterHeadersStatus::Continue;
     }
@@ -162,7 +164,7 @@ FilterHeadersStatus HttpModSecurityFilter::encode100ContinueHeaders(HeaderMap& h
     return FilterHeadersStatus::Continue;
 }
 
-FilterDataStatus HttpModSecurityFilter::encodeData(Buffer::Instance& data, bool) {
+FilterDataStatus HttpModSecurityFilter::encodeData(Buffer::Instance& data, bool end_stream) {
     if (intervined_) {
         return FilterDataStatus::Continue;
     }
@@ -170,11 +172,13 @@ FilterDataStatus HttpModSecurityFilter::encodeData(Buffer::Instance& data, bool)
     uint64_t num_slices = data.getRawSlices(nullptr, 0);
     STACK_ARRAY(slices, Buffer::RawSlice, num_slices);
     data.getRawSlices(slices.begin(), num_slices);
-    
     for (const Buffer::RawSlice& slice : slices) {
         modsecTransaction_->appendResponseBody(static_cast<unsigned char*>(slice.mem_), slice.len_);
     }
-    modsecTransaction_->processResponseBody();
+
+    if (end_stream) {
+        modsecTransaction_->processResponseBody();
+    }
     return intervention() ? FilterDataStatus::StopIterationAndBuffer : FilterDataStatus::Continue;
 }
 
