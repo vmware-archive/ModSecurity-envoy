@@ -64,6 +64,7 @@ const char* getProtocolString(const Protocol protocol) {
 FilterHeadersStatus HttpModSecurityFilter::decodeHeaders(HeaderMap& headers, bool end_stream) {
     ENVOY_LOG(debug, "HttpModSecurityFilter::decodeHeaders");
     if (intervined_ || requestProcessed_) {
+        ENVOY_LOG(debug, "Processed");
         return getRequestHeadersStatus();
     }
     auto downstreamAddress = decoder_callbacks_->streamInfo().downstreamLocalAddress();
@@ -120,6 +121,7 @@ FilterHeadersStatus HttpModSecurityFilter::decodeHeaders(HeaderMap& headers, boo
 FilterDataStatus HttpModSecurityFilter::decodeData(Buffer::Instance& data, bool end_stream) {
     ENVOY_LOG(debug, "HttpModSecurityFilter::decodeData");
     if (intervined_ || requestProcessed_) {
+        ENVOY_LOG(debug, "Processed");
         return getRequestStatus();
     }
 
@@ -127,8 +129,12 @@ FilterDataStatus HttpModSecurityFilter::decodeData(Buffer::Instance& data, bool 
     STACK_ARRAY(slices, Buffer::RawSlice, num_slices);
     data.getRawSlices(slices.begin(), num_slices);
     for (const Buffer::RawSlice& slice : slices) {
-        if (modsecTransaction_->appendRequestBody(static_cast<unsigned char*>(slice.mem_), slice.len_) == false) {
-            // Append failed since we reached the limit, check for intervention (in case SecRequestBodyLimitAction is set to Reject)
+        size_t requestLen = modsecTransaction_->getRequestBodyLength();
+        // If append fails or append reached the limit, test for intervention (in case SecRequestBodyLimitAction is set to Reject)
+        // Note, we can't rely solely on the return value of append, when SecRequestBodyLimitAction is set to Reject it returns true and sets the intervention
+        if (modsecTransaction_->appendRequestBody(static_cast<unsigned char*>(slice.mem_), slice.len_) == false ||
+            (slice.len_ > 0 && requestLen == modsecTransaction_->getRequestBodyLength())) {
+            ENVOY_LOG(debug, "HttpModSecurityFilter::decodeData appendRequestBody reached limit");
             if (intervention()) {
                 return FilterDataStatus::StopIterationNoBuffer;
             }
@@ -137,6 +143,7 @@ FilterDataStatus HttpModSecurityFilter::decodeData(Buffer::Instance& data, bool 
             break;
         }
     }
+
     if (end_stream) {
         requestProcessed_ = true;
         modsecTransaction_->processRequestBody();
@@ -144,7 +151,6 @@ FilterDataStatus HttpModSecurityFilter::decodeData(Buffer::Instance& data, bool 
     if (intervention()) {
         return FilterDataStatus::StopIterationNoBuffer;
     } 
-    
     return getRequestStatus();
 }
 
@@ -160,6 +166,7 @@ void HttpModSecurityFilter::setDecoderFilterCallbacks(StreamDecoderFilterCallbac
 FilterHeadersStatus HttpModSecurityFilter::encodeHeaders(HeaderMap& headers, bool end_stream) {
     ENVOY_LOG(debug, "HttpModSecurityFilter::encodeHeaders");
     if (intervined_ || responseProcessed_) {
+        ENVOY_LOG(debug, "Processed");
         return getResponseHeadersStatus();
     }
     auto status = headers.Status();
@@ -189,6 +196,7 @@ FilterHeadersStatus HttpModSecurityFilter::encode100ContinueHeaders(HeaderMap& h
 FilterDataStatus HttpModSecurityFilter::encodeData(Buffer::Instance& data, bool end_stream) {
     ENVOY_LOG(debug, "HttpModSecurityFilter::encodeData");
     if (intervined_ || responseProcessed_) {
+        ENVOY_LOG(debug, "Processed");
         return getResponseStatus();
     }
     
@@ -196,11 +204,16 @@ FilterDataStatus HttpModSecurityFilter::encodeData(Buffer::Instance& data, bool 
     STACK_ARRAY(slices, Buffer::RawSlice, num_slices);
     data.getRawSlices(slices.begin(), num_slices);
     for (const Buffer::RawSlice& slice : slices) {
-        if (modsecTransaction_->appendResponseBody(static_cast<unsigned char*>(slice.mem_), slice.len_) == false) {
-            // Append failed since we reached the limit, check for intervention (in case SecResponseBodyLimitAction is set to Reject)
+        size_t responseLen = modsecTransaction_->getResponseBodyLength();
+        // If append fails or append reached the limit, test for intervention (in case SecResponseBodyLimitAction is set to Reject)
+        // Note, we can't rely solely on the return value of append, when SecResponseBodyLimitAction is set to Reject it returns true and sets the intervention
+        if (modsecTransaction_->appendResponseBody(static_cast<unsigned char*>(slice.mem_), slice.len_) == false ||
+            (slice.len_ > 0 && responseLen == modsecTransaction_->getResponseBodyLength())) {
+            ENVOY_LOG(debug, "HttpModSecurityFilter::encodeData appendResponseBody reached limit");
             if (intervention()) {
                 return FilterDataStatus::StopIterationNoBuffer;
             }
+            // Otherwise set to process response
             end_stream = true;
             break;
         }
@@ -233,6 +246,7 @@ bool HttpModSecurityFilter::intervention() {
     if (!intervined_ && modsecTransaction_->m_it.disruptive) {
         // intervined_ must be set to true before sendLocalReply to avoid reentrancy when encoding the reply
         intervined_ = true;
+        ENVOY_LOG(debug, "intervention");
         decoder_callbacks_->sendLocalReply(static_cast<Http::Code>(modsecTransaction_->m_it.status), 
                                            "ModSecurity Action\n",
                                            [](Http::HeaderMap& headers) {
