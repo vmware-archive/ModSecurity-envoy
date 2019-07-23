@@ -28,7 +28,7 @@ HttpModSecurityFilterConfig::HttpModSecurityFilterConfig(
     int rulesLoaded = modsec_rules_->loadFromUri(rules().c_str());
     ENVOY_LOG(info, "Loading ModSecurity config from {}", rules());
     if (rulesLoaded == -1) {
-        ENVOY_LOG(error, "Failed to load rules!");
+        ENVOY_LOG(error, "Failed to load rules: {}", modsec_rules_->getParserError());
     } else {
         ENVOY_LOG(info, "Loaded {} rules", rulesLoaded);
     };
