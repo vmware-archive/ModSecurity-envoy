@@ -26,7 +26,7 @@ To build the envoy static binary with ModSecurity-Envoy filter:
 git clone git@github.com:octarinesec/ModSecurity-envoy.git
 cd ModSecurity-envoy
 git submodule update --init
-bazel build //http-filter-modsecurity:envoy # sometimes the build timesout and you should rerun it
+bazel build //:envoy # sometimes the build timesout and you should rerun it
 ```
 
 Download OWASP ModSecurity Core Rule Set (CRS). CRS is a set of generic attack
@@ -35,9 +35,9 @@ from wide range of attacks. For more information check out [https://modsecurity.
  
 
 ```bash
-wget https://github.com/SpiderLabs/owasp-modsecurity-crs/archive/v3.0.2.tar.gz
-tar xvzf v3.0.2.tar.gz
-cp owasp-modsecurity-crs-3.0.2/crs-setup.conf.example crs-setup.conf
+wget https://github.com/SpiderLabs/owasp-modsecurity-crs/archive/v3.1.1.tar.gz
+tar xvzf v3.1.1.tar.gz
+cp owasp-modsecurity-crs-3.1.1/crs-setup.conf.example crs-setup.conf
 ```
 
 ## Testing
@@ -55,7 +55,7 @@ docker run -p 5555:80 kennethreitz/httpbin
 Now let's run the envoy
 
 ```bash
-sudo ./bazel-bin/http-filter-modsecurity/envoy -c envoy-modsecurity-example.yaml -l info
+sudo ./bazel-bin/envoy -c envoy-modsecurity-example.yaml -l info
 ```
 
 Make our first request

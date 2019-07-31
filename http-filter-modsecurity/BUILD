@@ -9,17 +9,6 @@ load(
 
 load("@envoy_api//bazel:api_build_system.bzl", "api_proto_library")
 
-
-envoy_cc_binary(
-    name = "envoy",
-    repository = "@envoy",
-    deps = [
-        ":http_filter_config",
-        "@envoy//source/exe:envoy_main_entry_lib",
-    ],
-    linkopts = ["-lyajl", "-ldl", "-lrt", "-lpcre", "-lcurl", "-lxml2", "-lGeoIP"]
-)
-
 api_proto_library(
     name = "http_filter_proto",
     srcs = ["http_filter.proto"]
@@ -33,8 +22,8 @@ envoy_cc_library(
     repository = "@envoy",
     deps = [
         ":http_filter_proto_cc",
-        "@envoy//source/exe:envoy_common_lib",
         "//:libmodsecurity",
+        "@envoy//source/exe:envoy_common_lib",
     ],
 )
 
