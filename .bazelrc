@@ -1,0 +1,2 @@
+import %workspace%/envoy/.bazelrc
+build --workspace_status_command=envoy/bazel/get_workspace_status
