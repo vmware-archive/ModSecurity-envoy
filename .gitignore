@@ -3,3 +3,5 @@ bazel-*
 owasp-modsecurity*
 .project
 .vscode
+.cache
+build_release*/

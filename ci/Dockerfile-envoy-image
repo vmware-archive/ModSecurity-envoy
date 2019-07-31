@@ -1,0 +1,33 @@
+FROM ubuntu:16.04
+
+RUN apt-get update \
+    && apt-get install -y software-properties-common
+
+RUN add-apt-repository ppa:ubuntu-toolchain-r/test -y \
+    && apt-get update \
+    && apt-get upgrade -y \
+    && apt-get install -y ca-certificates \
+    # Add these to support dynamic requirements for envoy
+    && apt-get install -y libstdc++6 libyajl2 libgeoip1 libpcre++0v5 libxml2 curl libcurl4-gnutls-dev \
+    && apt-get autoremove -y \
+    && apt-get clean \
+    && rm -rf /tmp/* /var/tmp/* \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN mkdir -p /etc/envoy
+
+ADD build_release_stripped/envoy /usr/local/bin/envoy
+ADD ./envoy/configs/google_com_proxy.v2.yaml /etc/envoy/envoy.yaml
+
+COPY v3.1.1.tar.gz /etc/envoy/
+RUN cd /etc/envoy && tar -xzf v3.1.1.tar.gz && rm v3.1.1.tar.gz
+
+COPY conf /etc/envoy
+# Replace relative path to aboslute
+RUN sed -i 's#conf/modsecurity.conf#/etc/envoy/modsecurity.conf#' /etc/envoy/envoy-modsecurity-example.yaml
+
+EXPOSE 10000
+
+COPY ci/docker-entrypoint.sh /
+ENTRYPOINT ["/docker-entrypoint.sh"]
+CMD ["envoy", "-c", "/etc/envoy/envoy-modsecurity-example.yaml"]
