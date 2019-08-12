@@ -8,7 +8,7 @@
 #include "common/common/stack_array.h"
 #include "common/http/utility.h"
 #include "common/http/headers.h"
-
+#include "common/config/metadata.h"
 #include "envoy/server/filter_config.h"
 
 #include "modsecurity/rule_message.h"
@@ -16,8 +16,7 @@
 namespace Envoy {
 namespace Http {
 
-HttpModSecurityFilterConfig::HttpModSecurityFilterConfig(
-    const modsecurity::Decoder& proto_config)
+HttpModSecurityFilterConfig::HttpModSecurityFilterConfig(const modsecurity::Decoder& proto_config)
     : rules_(proto_config.rules()) {
     modsec_.reset(new modsecurity::ModSecurity());
     modsec_->setConnectorInformation("ModSecurity-test v0.0.1-alpha (ModSecurity test)");
@@ -34,6 +33,9 @@ HttpModSecurityFilterConfig::HttpModSecurityFilterConfig(
     };
 }
 
+HttpModSecurityFilterConfig::~HttpModSecurityFilterConfig() {
+}
+
 HttpModSecurityFilter::HttpModSecurityFilter(HttpModSecurityFilterConfigSharedPtr config)
     : config_(config), intervined_(false), requestProcessed_(false), responseProcessed_(false) {
     modsecTransaction_.reset(new modsecurity::Transaction(config_->modsec_.get(), config_->modsec_rules_.get(), this));
@@ -42,8 +44,6 @@ HttpModSecurityFilter::HttpModSecurityFilter(HttpModSecurityFilterConfigSharedPt
 HttpModSecurityFilter::~HttpModSecurityFilter() {
 }
 
-HttpModSecurityFilterConfig::~HttpModSecurityFilterConfig() {
-}
 
 void HttpModSecurityFilter::onDestroy() {
     modsecTransaction_->processLogging();
@@ -67,6 +67,16 @@ FilterHeadersStatus HttpModSecurityFilter::decodeHeaders(HeaderMap& headers, boo
         ENVOY_LOG(debug, "Processed");
         return getRequestHeadersStatus();
     }
+    // TODO - do we want to support dynamicMetadata?
+    const auto& metadata = decoder_callbacks_->route()->routeEntry()->metadata();
+    const auto& disable = Envoy::Config::Metadata::metadataValue(metadata, ModSecurityMetadataFilter::get().ModSecurity, MetadataModSecurityKey::get().Disable);
+    const auto& disable_request = Envoy::Config::Metadata::metadataValue(metadata, ModSecurityMetadataFilter::get().ModSecurity, MetadataModSecurityKey::get().DisableRequest);
+    if (disable_request.bool_value() || disable.bool_value()) {
+        ENVOY_LOG(debug, "Filter disabled");
+        requestProcessed_ = true;
+        return FilterHeadersStatus::Continue;
+    }
+    
     auto downstreamAddress = decoder_callbacks_->streamInfo().downstreamLocalAddress();
     // TODO - Upstream is (always?) still not resolved in this stage. Use our local proxy's ip. Is this what we want?
     ASSERT(decoder_callbacks_->connection() != nullptr);
@@ -169,6 +179,16 @@ FilterHeadersStatus HttpModSecurityFilter::encodeHeaders(HeaderMap& headers, boo
         ENVOY_LOG(debug, "Processed");
         return getResponseHeadersStatus();
     }
+    // TODO - do we want to support dynamicMetadata?
+    const auto& metadata = encoder_callbacks_->route()->routeEntry()->metadata();
+    const auto& disable = Envoy::Config::Metadata::metadataValue(metadata, ModSecurityMetadataFilter::get().ModSecurity, MetadataModSecurityKey::get().Disable);
+    const auto& disable_response = Envoy::Config::Metadata::metadataValue(metadata, ModSecurityMetadataFilter::get().ModSecurity, MetadataModSecurityKey::get().DisableResponse);
+    if (disable.bool_value() || disable_response.bool_value()) {
+        ENVOY_LOG(debug, "Filter disabled");
+        responseProcessed_ = true;
+        return FilterHeadersStatus::Continue;
+    }
+
     auto status = headers.Status();
     uint64_t code = Utility::getResponseStatus(headers);
     headers.iterate(

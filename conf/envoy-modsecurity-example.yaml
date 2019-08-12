@@ -21,8 +21,14 @@ static_resources:
                   prefix: "/"
                 route:
                   cluster: service1
+                metadata:
+                  filter_metadata:
+                    envoy.filters.http.modsecurity:
+                      # disable: true
+                      # disable_request: true
+                      # disable_response: true
           http_filters:
-          - name: modsecurity          # before envoy.router because order matters!
+          - name: envoy.filters.http.modsecurity          # before envoy.router because order matters!
             config:
              rules: conf/modsecurity.conf
           - name: envoy.router

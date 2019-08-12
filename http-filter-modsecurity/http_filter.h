@@ -6,6 +6,7 @@
 
 #include "common/common/logger.h"
 #include "envoy/server/filter_config.h"
+#include "well_known_names.h"
 
 #include "http-filter-modsecurity/http_filter.pb.h"
 

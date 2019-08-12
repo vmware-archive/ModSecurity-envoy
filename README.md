@@ -6,7 +6,7 @@ The most common use case is for ModSecurity-Envoy is to apply WAF on East-West t
 As Envoy is the de-facto standard proxy in kubernetes deployments and is usually deployed in every pod you can deploy
 this Envoy version and Enable ModSecurity-Envoy Filter on all pods or on the most important ones.
 
-Some of the ideas behind the project are desribed in this [blog](https://github.com/octarinesec/ModSecurity-envoy)
+Some of the ideas behind the project are described in this [blog](https://github.com/octarinesec/ModSecurity-envoy)
 
 ## Prerequisites
 

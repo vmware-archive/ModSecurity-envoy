@@ -38,7 +38,9 @@ public:
     return ProtobufTypes::MessagePtr{new modsecurity::Decoder()};
   }
 
-  std::string name() override { return "modsecurity"; }
+  std::string name() override { 
+    return Envoy::Http::ModSecurityFilterNames::get().ModSecurity;
+  }
 
 private:
   Http::FilterFactoryCb createFilter(const modsecurity::Decoder& proto_config, FactoryContext&) {
