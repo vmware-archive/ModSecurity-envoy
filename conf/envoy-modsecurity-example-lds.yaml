@@ -1,0 +1,21 @@
+static_resources:
+  clusters:
+  - name: service1
+    connect_timeout: 8s
+    type: logical_dns
+    lb_policy: round_robin
+    hosts:
+    - socket_address:
+        address: 127.0.0.1
+        port_value: 5555
+
+dynamic_resources:
+  lds_config:
+    path: conf/lds.yaml
+
+admin:
+  access_log_path: "/dev/null"
+  address:
+    socket_address:
+      address: 0.0.0.0
+      port_value: 8001

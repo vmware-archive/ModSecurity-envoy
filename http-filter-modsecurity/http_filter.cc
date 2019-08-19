@@ -17,20 +17,34 @@ namespace Envoy {
 namespace Http {
 
 HttpModSecurityFilterConfig::HttpModSecurityFilterConfig(const modsecurity::Decoder& proto_config)
-    : rules_(proto_config.rules()) {
+    : rules_path_(proto_config.rules_path()),
+      rules_inline_(proto_config.rules_inline()) {
     modsec_.reset(new modsecurity::ModSecurity());
     modsec_->setConnectorInformation("ModSecurity-test v0.0.1-alpha (ModSecurity test)");
     modsec_->setServerLogCb(HttpModSecurityFilter::_logCb, modsecurity::RuleMessageLogProperty |
                                                            modsecurity::IncludeFullHighlightLogProperty);
 
     modsec_rules_.reset(new modsecurity::Rules());
-    int rulesLoaded = modsec_rules_->loadFromUri(rules().c_str());
-    ENVOY_LOG(info, "Loading ModSecurity config from {}", rules());
-    if (rulesLoaded == -1) {
-        ENVOY_LOG(error, "Failed to load rules: {}", modsec_rules_->getParserError());
-    } else {
-        ENVOY_LOG(info, "Loaded {} rules", rulesLoaded);
-    };
+    if (!rules_path().empty()) {
+        int rulesLoaded = modsec_rules_->loadFromUri(rules_path().c_str());
+        ENVOY_LOG(debug, "Loading ModSecurity config from {}", rules_path());
+        if (rulesLoaded == -1) {
+            ENVOY_LOG(error, "Failed to load rules: {}", modsec_rules_->getParserError());
+        } else {
+            ENVOY_LOG(info, "Loaded {} rules", rulesLoaded);
+        };
+    }
+    if (!rules_inline().empty()) {
+        
+        int rulesLoaded = modsec_rules_->load(rules_inline().c_str());
+        ENVOY_LOG(debug, "Loading ModSecurity inline rules");
+        if (rulesLoaded == -1) {
+            ENVOY_LOG(error, "Failed to load rules: {}", modsec_rules_->getParserError());
+        } else {
+            ENVOY_LOG(info, "Loaded {} inline rules", rulesLoaded);
+        };
+    }
+    
 }
 
 HttpModSecurityFilterConfig::~HttpModSecurityFilterConfig() {

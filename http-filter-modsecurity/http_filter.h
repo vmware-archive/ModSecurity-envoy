@@ -21,13 +21,15 @@ public:
   HttpModSecurityFilterConfig(const modsecurity::Decoder& proto_config);
   ~HttpModSecurityFilterConfig();
 
-  const std::string& rules() const { return rules_; }
+  const std::string& rules_path() const { return rules_path_; }
+  const std::string& rules_inline() const { return rules_inline_; }
 
   std::shared_ptr<modsecurity::ModSecurity> modsec_;
   std::shared_ptr<modsecurity::Rules> modsec_rules_;
 
 private:
-  const std::string rules_;
+  const std::string rules_path_;
+  const std::string rules_inline_;
 
 };
 

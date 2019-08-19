@@ -1,0 +1,46 @@
+version_info: "1"
+resources:
+- "@type": type.googleapis.com/envoy.api.v2.Listener
+  name: listener_0
+  address:
+    socket_address:
+      address: 0.0.0.0
+      port_value: 8585
+  filter_chains:
+  - filters:
+    - name: envoy.http_connection_manager
+      config:
+        codec_type: auto
+        stat_prefix: ingress_http
+        route_config:
+          name: local_route
+          virtual_hosts:
+          - name: backend
+            domains:
+            - "*"
+            routes:
+            - match:
+                prefix: "/"
+              route:
+                cluster: service1
+              metadata:
+                filter_metadata:
+                  envoy.filters.http.modsecurity:
+                    # disable: true
+                    # disable_request: true
+                    # disable_response: true
+        http_filters:
+        # before envoy.router because order matters!
+        - name: envoy.filters.http.modsecurity
+          config:
+            rules_inline: |
+              Include "conf/modsecurity.v3.0.3.conf"
+              Include "owasp-modsecurity-crs-3.1.1/crs-setup.conf.example"
+              Include "owasp-modsecurity-crs-3.1.1/rules/*.conf"
+
+              SecRuleEngine On
+              SecRule ARGS:param1 "test" "id:1,phase:1,deny,status:400,msg:'Test rule'"
+              SecRule REQUEST_BODY  "blocktest" "id:2,phase:2,deny,status:400,msg:'Test rule'"
+
+        - name: envoy.router
+          config: {}

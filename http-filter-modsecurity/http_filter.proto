@@ -5,5 +5,10 @@ package modsecurity;
 import "validate/validate.proto";
 
 message Decoder {
-    string rules = 1 [(validate.rules).string.min_bytes = 1];
+    // If set, rules are loaded from this path
+    string rules_path = 1;
+    
+    // If set, rules are loaded from this inline configuration.
+    // Note, if both rules_path and rules_inline are set, rules_path is first loaded and afterwards rules_inline is loaded
+    string rules_inline = 2;
 }
