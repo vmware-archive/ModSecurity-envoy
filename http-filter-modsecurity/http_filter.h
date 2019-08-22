@@ -1,12 +1,11 @@
 #pragma once
 
-
-
 #include <string>
 
 #include "common/common/logger.h"
 #include "envoy/server/filter_config.h"
 #include "well_known_names.h"
+#include "webhook_fetcher.h"
 
 #include "http-filter-modsecurity/http_filter.pb.h"
 
@@ -18,11 +17,12 @@ namespace Http {
 
 class HttpModSecurityFilterConfig : public Logger::Loggable<Logger::Id::filter> {
 public:
-  HttpModSecurityFilterConfig(const modsecurity::Decoder& proto_config);
+  HttpModSecurityFilterConfig(const modsecurity::ModsecurityFilterConfigDecoder& proto_config);
   ~HttpModSecurityFilterConfig();
 
   const std::string& rules_path() const { return rules_path_; }
   const std::string& rules_inline() const { return rules_inline_; }
+  const modsecurity::ModsecurityWebhook& webhook() const { return webhook_; }
 
   std::shared_ptr<modsecurity::ModSecurity> modsec_;
   std::shared_ptr<modsecurity::Rules> modsec_rules_;
@@ -30,6 +30,7 @@ public:
 private:
   const std::string rules_path_;
   const std::string rules_inline_;
+  const modsecurity::ModsecurityWebhook webhook_;
 
 };
 
@@ -52,14 +53,15 @@ typedef std::shared_ptr<HttpModSecurityFilterConfig> HttpModSecurityFilterConfig
  *   
  */
 class HttpModSecurityFilter : public StreamFilter,
-                              public Logger::Loggable<Logger::Id::filter> {
+                              public Logger::Loggable<Logger::Id::filter>,
+                              public WebhookFetcherCallback {
 public:
   /**
    * This static function will be called by modsecurity and internally invoke logCb filter's method
    */
   static void _logCb(void* data, const void* ruleMessagev);
 
-    HttpModSecurityFilter(HttpModSecurityFilterConfigSharedPtr);
+    HttpModSecurityFilter(HttpModSecurityFilterConfigSharedPtr, Server::Configuration::FactoryContext&);
   ~HttpModSecurityFilter();
 
   // Http::StreamFilterBase
@@ -79,12 +81,16 @@ public:
   void setEncoderFilterCallbacks(StreamEncoderFilterCallbacks&) override;
   FilterMetadataStatus encodeMetadata(MetadataMap& metadata_map) override;
 
+  // Webhook Callbacks
+  void onSuccess(const Http::MessagePtr& response) override;
+  void onFailure(FailureReason reason) override;
 
 private:
   const HttpModSecurityFilterConfigSharedPtr config_;
   StreamDecoderFilterCallbacks* decoder_callbacks_;
   StreamEncoderFilterCallbacks* encoder_callbacks_;
-  std::shared_ptr<modsecurity::Transaction> modsecTransaction_;
+  std::shared_ptr<modsecurity::Transaction> modsec_transaction_;
+  WebhookFetcherPtr webhook_fetcher_;
   
   void logCb(const modsecurity::RuleMessage * ruleMessage);
   /**
@@ -103,8 +109,8 @@ private:
   // will return ::Continue.
   // This is to allow the local reply to flow back to the downstream.
   bool intervined_;
-  bool requestProcessed_;
-  bool responseProcessed_;
+  bool request_processed_;
+  bool response_processed_;
   // TODO - convert three booleans to state?
 };
 

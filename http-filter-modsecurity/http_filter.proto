@@ -2,13 +2,69 @@ syntax = "proto3";
 
 package modsecurity;
 
+import "google/protobuf/duration.proto";
+import "gogoproto/gogo.proto";
+
 import "validate/validate.proto";
 
-message Decoder {
+message ModsecurityFilterConfigDecoder {
     // If set, rules are loaded from this path
     string rules_path = 1;
     
     // If set, rules are loaded from this inline configuration.
     // Note, if both rules_path and rules_inline are set, rules_path is first loaded and afterwards rules_inline is loaded
     string rules_inline = 2;
+
+    // If set, a webhook will be called when a rule is matched. (non-disruptive actions only since ModSecurity >= v3.0.3)
+    ModsecurityWebhook webhook = 3;
 }
+
+message ModsecurityWebhook {
+    // The http server URI to trigger the webhook.
+    HttpUri http_uri = 1 [(validate.rules).message.required = true];
+
+    // If provided, an X-Envoy-Webhook-Signature header will be added to the request with HMAC-SHA256 over the contents and `secret` as its key.
+    string secret = 2;
+}
+
+// TODO - HttpUri is copied from envoy/api/envoy/api/v2/core/http_uri.proto
+// This should use the original http_uri.proto, however, since its visibility is not public it can't be imported
+//
+// Envoy external URI descriptor
+message HttpUri {
+    // The HTTP server URI. It should be a full FQDN with protocol, host and path.
+    //
+    // Example:
+    //
+    // .. code-block:: yaml
+    //
+    //    uri: https://www.googleapis.com/oauth2/v1/certs
+    //
+    string uri = 1 [(validate.rules).string.min_bytes = 1];
+  
+    // Specify how `uri` is to be fetched. Today, this requires an explicit
+    // cluster, but in the future we may support dynamic cluster creation or
+    // inline DNS resolution. See `issue
+    // <https://github.com/envoyproxy/envoy/issues/1606>`_.
+    oneof http_upstream_type {
+      option (validate.required) = true;
+      // A cluster is created in the Envoy "cluster_manager" config
+      // section. This field specifies the cluster name.
+      //
+      // Example:
+      //
+      // .. code-block:: yaml
+      //
+      //    cluster: jwks_cluster
+      //
+      string cluster = 2 [(validate.rules).string.min_bytes = 1];
+    }
+  
+    // Sets the maximum duration in milliseconds that a response can take to arrive upon request.
+    google.protobuf.Duration timeout = 3 [
+      (validate.rules).duration.gte = {},
+      (validate.rules).duration.required = true,
+      (gogoproto.stdduration) = true
+    ];
+  }
+  

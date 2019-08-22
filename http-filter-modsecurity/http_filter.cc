@@ -1,24 +1,25 @@
-#include <cstdlib>
 #include <string>
 #include <vector>
 #include <iostream>
 
 #include "http_filter.h"
+#include "utility.h"
 
 #include "common/common/stack_array.h"
 #include "common/http/utility.h"
 #include "common/http/headers.h"
 #include "common/config/metadata.h"
 #include "envoy/server/filter_config.h"
-
+#include "common/json/json_loader.h"
 #include "modsecurity/rule_message.h"
 
 namespace Envoy {
 namespace Http {
 
-HttpModSecurityFilterConfig::HttpModSecurityFilterConfig(const modsecurity::Decoder& proto_config)
+HttpModSecurityFilterConfig::HttpModSecurityFilterConfig(const modsecurity::ModsecurityFilterConfigDecoder& proto_config)
     : rules_path_(proto_config.rules_path()),
-      rules_inline_(proto_config.rules_inline()) {
+      rules_inline_(proto_config.rules_inline()),
+      webhook_(proto_config.webhook()) {
     modsec_.reset(new modsecurity::ModSecurity());
     modsec_->setConnectorInformation("ModSecurity-test v0.0.1-alpha (ModSecurity test)");
     modsec_->setServerLogCb(HttpModSecurityFilter::_logCb, modsecurity::RuleMessageLogProperty |
@@ -44,15 +45,16 @@ HttpModSecurityFilterConfig::HttpModSecurityFilterConfig(const modsecurity::Deco
             ENVOY_LOG(info, "Loaded {} inline rules", rulesLoaded);
         };
     }
-    
 }
 
 HttpModSecurityFilterConfig::~HttpModSecurityFilterConfig() {
 }
 
-HttpModSecurityFilter::HttpModSecurityFilter(HttpModSecurityFilterConfigSharedPtr config)
-    : config_(config), intervined_(false), requestProcessed_(false), responseProcessed_(false) {
-    modsecTransaction_.reset(new modsecurity::Transaction(config_->modsec_.get(), config_->modsec_rules_.get(), this));
+HttpModSecurityFilter::HttpModSecurityFilter(HttpModSecurityFilterConfigSharedPtr config, Server::Configuration::FactoryContext& context)
+    : config_(config), intervined_(false), request_processed_(false), response_processed_(false) {
+    
+    modsec_transaction_.reset(new modsecurity::Transaction(config_->modsec_.get(), config_->modsec_rules_.get(), this));
+    webhook_fetcher_.reset(new WebhookFetcher(context.clusterManager(), config_->webhook().http_uri(), config_->webhook().secret(), *this));
 }
 
 HttpModSecurityFilter::~HttpModSecurityFilter() {
@@ -60,7 +62,7 @@ HttpModSecurityFilter::~HttpModSecurityFilter() {
 
 
 void HttpModSecurityFilter::onDestroy() {
-    modsecTransaction_->processLogging();
+    modsec_transaction_->processLogging();
 }
 
 const char* getProtocolString(const Protocol protocol) {
@@ -77,7 +79,7 @@ const char* getProtocolString(const Protocol protocol) {
 
 FilterHeadersStatus HttpModSecurityFilter::decodeHeaders(HeaderMap& headers, bool end_stream) {
     ENVOY_LOG(debug, "HttpModSecurityFilter::decodeHeaders");
-    if (intervined_ || requestProcessed_) {
+    if (intervined_ || request_processed_) {
         ENVOY_LOG(debug, "Processed");
         return getRequestHeadersStatus();
     }
@@ -87,7 +89,7 @@ FilterHeadersStatus HttpModSecurityFilter::decodeHeaders(HeaderMap& headers, boo
     const auto& disable_request = Envoy::Config::Metadata::metadataValue(metadata, ModSecurityMetadataFilter::get().ModSecurity, MetadataModSecurityKey::get().DisableRequest);
     if (disable_request.bool_value() || disable.bool_value()) {
         ENVOY_LOG(debug, "Filter disabled");
-        requestProcessed_ = true;
+        request_processed_ = true;
         return FilterHeadersStatus::Continue;
     }
     
@@ -100,7 +102,7 @@ FilterHeadersStatus HttpModSecurityFilter::decodeHeaders(HeaderMap& headers, boo
     ASSERT(downstreamAddress->type() == Network::Address::Type::Ip);
     ASSERT(localAddress != nullptr);
     ASSERT(localAddress->type() == Network::Address::Type::Ip);
-    modsecTransaction_->processConnection(downstreamAddress->ip()->addressAsString().c_str(), 
+    modsec_transaction_->processConnection(downstreamAddress->ip()->addressAsString().c_str(), 
                                           downstreamAddress->ip()->port(),
                                           localAddress->ip()->addressAsString().c_str(), 
                                           localAddress->ip()->port());
@@ -110,7 +112,7 @@ FilterHeadersStatus HttpModSecurityFilter::decodeHeaders(HeaderMap& headers, boo
 
     auto uri = headers.Path();
     auto method = headers.Method();
-    modsecTransaction_->processURI(std::string(uri->value().getStringView()).c_str(), 
+    modsec_transaction_->processURI(std::string(uri->value().getStringView()).c_str(), 
                                     std::string(method->value().getStringView()).c_str(),
                                     getProtocolString(decoder_callbacks_->streamInfo().protocol().value_or(Protocol::Http11)));
     if (intervention()) {
@@ -122,19 +124,19 @@ FilterHeadersStatus HttpModSecurityFilter::decodeHeaders(HeaderMap& headers, boo
                 
                 std::string k = std::string(header.key().getStringView());
                 std::string v = std::string(header.value().getStringView());
-                static_cast<HttpModSecurityFilter*>(context)->modsecTransaction_->addRequestHeader(k.c_str(), v.c_str());
+                static_cast<HttpModSecurityFilter*>(context)->modsec_transaction_->addRequestHeader(k.c_str(), v.c_str());
                 // TODO - does this special case makes sense? it doesn't exist on apache/nginx modsecurity bridges.
                 // host header is cannonized to :authority even on http older than 2 
                 // see https://github.com/envoyproxy/envoy/issues/2209
                 if (k == Headers::get().Host.get()) {
-                    static_cast<HttpModSecurityFilter*>(context)->modsecTransaction_->addRequestHeader(Headers::get().HostLegacy.get().c_str(), v.c_str());
+                    static_cast<HttpModSecurityFilter*>(context)->modsec_transaction_->addRequestHeader(Headers::get().HostLegacy.get().c_str(), v.c_str());
                 }
                 return HeaderMap::Iterate::Continue;
             },
             this);
-    modsecTransaction_->processRequestHeaders();
+    modsec_transaction_->processRequestHeaders();
     if (end_stream) {
-        requestProcessed_ = true;
+        request_processed_ = true;
     }
     if (intervention()) {
         return FilterHeadersStatus::StopIteration;
@@ -144,7 +146,7 @@ FilterHeadersStatus HttpModSecurityFilter::decodeHeaders(HeaderMap& headers, boo
 
 FilterDataStatus HttpModSecurityFilter::decodeData(Buffer::Instance& data, bool end_stream) {
     ENVOY_LOG(debug, "HttpModSecurityFilter::decodeData");
-    if (intervined_ || requestProcessed_) {
+    if (intervined_ || request_processed_) {
         ENVOY_LOG(debug, "Processed");
         return getRequestStatus();
     }
@@ -153,11 +155,11 @@ FilterDataStatus HttpModSecurityFilter::decodeData(Buffer::Instance& data, bool 
     STACK_ARRAY(slices, Buffer::RawSlice, num_slices);
     data.getRawSlices(slices.begin(), num_slices);
     for (const Buffer::RawSlice& slice : slices) {
-        size_t requestLen = modsecTransaction_->getRequestBodyLength();
+        size_t requestLen = modsec_transaction_->getRequestBodyLength();
         // If append fails or append reached the limit, test for intervention (in case SecRequestBodyLimitAction is set to Reject)
         // Note, we can't rely solely on the return value of append, when SecRequestBodyLimitAction is set to Reject it returns true and sets the intervention
-        if (modsecTransaction_->appendRequestBody(static_cast<unsigned char*>(slice.mem_), slice.len_) == false ||
-            (slice.len_ > 0 && requestLen == modsecTransaction_->getRequestBodyLength())) {
+        if (modsec_transaction_->appendRequestBody(static_cast<unsigned char*>(slice.mem_), slice.len_) == false ||
+            (slice.len_ > 0 && requestLen == modsec_transaction_->getRequestBodyLength())) {
             ENVOY_LOG(debug, "HttpModSecurityFilter::decodeData appendRequestBody reached limit");
             if (intervention()) {
                 return FilterDataStatus::StopIterationNoBuffer;
@@ -169,8 +171,8 @@ FilterDataStatus HttpModSecurityFilter::decodeData(Buffer::Instance& data, bool 
     }
 
     if (end_stream) {
-        requestProcessed_ = true;
-        modsecTransaction_->processRequestBody();
+        request_processed_ = true;
+        modsec_transaction_->processRequestBody();
     }
     if (intervention()) {
         return FilterDataStatus::StopIterationNoBuffer;
@@ -189,7 +191,7 @@ void HttpModSecurityFilter::setDecoderFilterCallbacks(StreamDecoderFilterCallbac
 
 FilterHeadersStatus HttpModSecurityFilter::encodeHeaders(HeaderMap& headers, bool end_stream) {
     ENVOY_LOG(debug, "HttpModSecurityFilter::encodeHeaders");
-    if (intervined_ || responseProcessed_) {
+    if (intervined_ || response_processed_) {
         ENVOY_LOG(debug, "Processed");
         return getResponseHeadersStatus();
     }
@@ -199,7 +201,7 @@ FilterHeadersStatus HttpModSecurityFilter::encodeHeaders(HeaderMap& headers, boo
     const auto& disable_response = Envoy::Config::Metadata::metadataValue(metadata, ModSecurityMetadataFilter::get().ModSecurity, MetadataModSecurityKey::get().DisableResponse);
     if (disable.bool_value() || disable_response.bool_value()) {
         ENVOY_LOG(debug, "Filter disabled");
-        responseProcessed_ = true;
+        response_processed_ = true;
         return FilterHeadersStatus::Continue;
     }
 
@@ -207,14 +209,14 @@ FilterHeadersStatus HttpModSecurityFilter::encodeHeaders(HeaderMap& headers, boo
     uint64_t code = Utility::getResponseStatus(headers);
     headers.iterate(
             [](const HeaderEntry& header, void* context) -> HeaderMap::Iterate {
-                static_cast<HttpModSecurityFilter*>(context)->modsecTransaction_->addResponseHeader(
+                static_cast<HttpModSecurityFilter*>(context)->modsec_transaction_->addResponseHeader(
                     std::string(header.key().getStringView()).c_str(),
                     std::string(header.value().getStringView()).c_str()
                 );
                 return HeaderMap::Iterate::Continue;
             },
             this);
-    modsecTransaction_->processResponseHeaders(code, 
+    modsec_transaction_->processResponseHeaders(code, 
             getProtocolString(encoder_callbacks_->streamInfo().protocol().value_or(Protocol::Http11)));
         
     if (intervention()) {
@@ -229,7 +231,7 @@ FilterHeadersStatus HttpModSecurityFilter::encode100ContinueHeaders(HeaderMap& h
 
 FilterDataStatus HttpModSecurityFilter::encodeData(Buffer::Instance& data, bool end_stream) {
     ENVOY_LOG(debug, "HttpModSecurityFilter::encodeData");
-    if (intervined_ || responseProcessed_) {
+    if (intervined_ || response_processed_) {
         ENVOY_LOG(debug, "Processed");
         return getResponseStatus();
     }
@@ -238,11 +240,11 @@ FilterDataStatus HttpModSecurityFilter::encodeData(Buffer::Instance& data, bool 
     STACK_ARRAY(slices, Buffer::RawSlice, num_slices);
     data.getRawSlices(slices.begin(), num_slices);
     for (const Buffer::RawSlice& slice : slices) {
-        size_t responseLen = modsecTransaction_->getResponseBodyLength();
+        size_t responseLen = modsec_transaction_->getResponseBodyLength();
         // If append fails or append reached the limit, test for intervention (in case SecResponseBodyLimitAction is set to Reject)
         // Note, we can't rely solely on the return value of append, when SecResponseBodyLimitAction is set to Reject it returns true and sets the intervention
-        if (modsecTransaction_->appendResponseBody(static_cast<unsigned char*>(slice.mem_), slice.len_) == false ||
-            (slice.len_ > 0 && responseLen == modsecTransaction_->getResponseBodyLength())) {
+        if (modsec_transaction_->appendResponseBody(static_cast<unsigned char*>(slice.mem_), slice.len_) == false ||
+            (slice.len_ > 0 && responseLen == modsec_transaction_->getResponseBodyLength())) {
             ENVOY_LOG(debug, "HttpModSecurityFilter::encodeData appendResponseBody reached limit");
             if (intervention()) {
                 return FilterDataStatus::StopIterationNoBuffer;
@@ -254,8 +256,8 @@ FilterDataStatus HttpModSecurityFilter::encodeData(Buffer::Instance& data, bool 
     }
 
     if (end_stream) {
-        responseProcessed_ = true;
-        modsecTransaction_->processResponseBody();
+        response_processed_ = true;
+        modsec_transaction_->processResponseBody();
     }
     if (intervention()) {
         return FilterDataStatus::StopIterationNoBuffer;
@@ -277,11 +279,11 @@ void HttpModSecurityFilter::setEncoderFilterCallbacks(StreamEncoderFilterCallbac
 }
 
 bool HttpModSecurityFilter::intervention() {
-    if (!intervined_ && modsecTransaction_->m_it.disruptive) {
+    if (!intervined_ && modsec_transaction_->m_it.disruptive) {
         // intervined_ must be set to true before sendLocalReply to avoid reentrancy when encoding the reply
         intervined_ = true;
         ENVOY_LOG(debug, "intervention");
-        decoder_callbacks_->sendLocalReply(static_cast<Http::Code>(modsecTransaction_->m_it.status), 
+        decoder_callbacks_->sendLocalReply(static_cast<Http::Code>(modsec_transaction_->m_it.status), 
                                            "ModSecurity Action\n",
                                            [](Http::HeaderMap& headers) {
                                            }, absl::nullopt, "");
@@ -295,13 +297,13 @@ FilterHeadersStatus HttpModSecurityFilter::getRequestHeadersStatus() {
         ENVOY_LOG(debug, "StopIteration");
         return FilterHeadersStatus::StopIteration;
     }
-    if (requestProcessed_) {
+    if (request_processed_) {
         ENVOY_LOG(debug, "Continue");
         return FilterHeadersStatus::Continue;
     }
-    // If disruptive, hold until requestProcessed_, otherwise let the data flow.
+    // If disruptive, hold until request_processed_, otherwise let the data flow.
     ENVOY_LOG(debug, "RuleEngine");
-    return modsecTransaction_->getRuleEngineState() == modsecurity::Rules::EnabledRuleEngine ? 
+    return modsec_transaction_->getRuleEngineState() == modsecurity::Rules::EnabledRuleEngine ? 
                 FilterHeadersStatus::StopIteration : 
                 FilterHeadersStatus::Continue;
 }
@@ -311,39 +313,39 @@ FilterDataStatus HttpModSecurityFilter::getRequestStatus() {
         ENVOY_LOG(debug, "StopIterationNoBuffer");
         return FilterDataStatus::StopIterationNoBuffer;
     }
-    if (requestProcessed_) {
+    if (request_processed_) {
         ENVOY_LOG(debug, "Continue");
         return FilterDataStatus::Continue;
     }
-    // If disruptive, hold until requestProcessed_, otherwise let the data flow.
+    // If disruptive, hold until request_processed_, otherwise let the data flow.
     ENVOY_LOG(debug, "RuleEngine");
-    return modsecTransaction_->getRuleEngineState() == modsecurity::Rules::EnabledRuleEngine ? 
+    return modsec_transaction_->getRuleEngineState() == modsecurity::Rules::EnabledRuleEngine ? 
                 FilterDataStatus::StopIterationAndBuffer : 
                 FilterDataStatus::Continue;
 }
 
 FilterHeadersStatus HttpModSecurityFilter::getResponseHeadersStatus() {
-    if (intervined_ || responseProcessed_) {
+    if (intervined_ || response_processed_) {
         // If intervined, let encodeData return the localReply
         ENVOY_LOG(debug, "Continue");
         return FilterHeadersStatus::Continue;
     }
-    // If disruptive, hold until responseProcessed_, otherwise let the data flow.
+    // If disruptive, hold until response_processed_, otherwise let the data flow.
     ENVOY_LOG(debug, "RuleEngine");
-    return modsecTransaction_->getRuleEngineState() == modsecurity::Rules::EnabledRuleEngine ? 
+    return modsec_transaction_->getRuleEngineState() == modsecurity::Rules::EnabledRuleEngine ? 
                 FilterHeadersStatus::StopIteration : 
                 FilterHeadersStatus::Continue;
 }
 
 FilterDataStatus HttpModSecurityFilter::getResponseStatus() {
-    if (intervined_ || responseProcessed_) {
+    if (intervined_ || response_processed_) {
         // If intervined, let encodeData return the localReply
         ENVOY_LOG(debug, "Continue");
         return FilterDataStatus::Continue;
     }
-    // If disruptive, hold until responseProcessed_, otherwise let the data flow.
+    // If disruptive, hold until response_processed_, otherwise let the data flow.
     ENVOY_LOG(debug, "RuleEngine");
-    return modsecTransaction_->getRuleEngineState() == modsecurity::Rules::EnabledRuleEngine ? 
+    return modsec_transaction_->getRuleEngineState() == modsecurity::Rules::EnabledRuleEngine ? 
                 FilterDataStatus::StopIterationAndBuffer : 
                 FilterDataStatus::Continue;
 
@@ -355,7 +357,6 @@ void HttpModSecurityFilter::_logCb(void *data, const void *ruleMessagev) {
 
     filter_->logCb(ruleMessage);
 }
-
 
 void HttpModSecurityFilter::logCb(const modsecurity::RuleMessage * ruleMessage) {
     if (ruleMessage == nullptr) {
@@ -371,6 +372,15 @@ void HttpModSecurityFilter::logCb(const modsecurity::RuleMessage * ruleMessage) 
                     // see https://github.com/SpiderLabs/ModSecurity/commit/91daeee9f6a61b8eda07a3f77fc64bae7c6b7c36
                     ruleMessage->m_isDisruptive ? "Disruptive" : "Non-disruptive",
                     modsecurity::RuleMessage::log(ruleMessage));
+    webhook_fetcher_->invoke(getRuleMessageAsJsonString(ruleMessage));
+}
+
+
+void HttpModSecurityFilter::onSuccess(const Http::MessagePtr& response) {
+    ENVOY_LOG(info, "webhook success!");
+}
+void HttpModSecurityFilter::onFailure(FailureReason reason) {
+    ENVOY_LOG(info, "webhook failure!");
 }
 
 } // namespace Http

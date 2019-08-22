@@ -11,14 +11,17 @@ load("@envoy_api//bazel:api_build_system.bzl", "api_proto_library")
 
 api_proto_library(
     name = "http_filter_proto",
-    srcs = ["http_filter.proto"]
+    srcs = ["http_filter.proto"],
+    deps = [
+        # TODO - "@envoy_api//envoy/api/v2/core:http_uri" (bad visibility)
+    ]
 )
 
 envoy_cc_library(
     name = "http_filter_lib",
     copts=["-Wno-unused-function", "-Wno-unused-parameter", "-Wno-reorder", "-Wno-unused-variable", "-Imodsecurity/include"],
-    srcs = ["http_filter.cc"],
-    hdrs = glob(["http_filter.h", "well_known_names.h"]),
+    srcs = ["utility.cc", "http_filter.cc", "webhook_fetcher.cc"],
+    hdrs = glob(["utility.h", "http_filter.h", "webhook_fetcher.h", "well_known_names.h"]),
     repository = "@envoy",
     deps = [
         ":http_filter_proto_cc",

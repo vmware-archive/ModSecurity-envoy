@@ -1,4 +1,5 @@
 #include <string>
+#include <memory>
 
 #include "http_filter.h"
 
@@ -17,7 +18,7 @@ public:
   Http::FilterFactoryCb createFilterFactory(const Json::Object& json_config, const std::string&,
                                             FactoryContext& context) override {
 
-    modsecurity::Decoder proto_config;
+    modsecurity::ModsecurityFilterConfigDecoder proto_config;
     translateHttpModSecurityFilter(json_config, proto_config);
 
     return createFilter(proto_config, context);
@@ -28,14 +29,14 @@ public:
                                                      FactoryContext& context) override {
 
     return createFilter(
-        Envoy::MessageUtil::downcastAndValidate<const modsecurity::Decoder&>(proto_config), context);
+        Envoy::MessageUtil::downcastAndValidate<const modsecurity::ModsecurityFilterConfigDecoder&>(proto_config), context);
   }
 
   /**
    *  Return the Protobuf Message that represents your config incase you have config proto
    */
   ProtobufTypes::MessagePtr createEmptyConfigProto() override {
-    return ProtobufTypes::MessagePtr{new modsecurity::Decoder()};
+    return ProtobufTypes::MessagePtr{new modsecurity::ModsecurityFilterConfigDecoder()};
   }
 
   std::string name() override { 
@@ -43,19 +44,20 @@ public:
   }
 
 private:
-  Http::FilterFactoryCb createFilter(const modsecurity::Decoder& proto_config, FactoryContext&) {
+  Http::FilterFactoryCb createFilter(const modsecurity::ModsecurityFilterConfigDecoder& proto_config, FactoryContext& context) {
     Http::HttpModSecurityFilterConfigSharedPtr config =
         std::make_shared<Http::HttpModSecurityFilterConfig>(
             Http::HttpModSecurityFilterConfig(proto_config));
 
-    return [config](Http::FilterChainFactoryCallbacks& callbacks) -> void {
-      auto filter = new Http::HttpModSecurityFilter(config);
-      callbacks.addStreamFilter(Http::StreamFilterSharedPtr{filter});
+    return [config, &context](Http::FilterChainFactoryCallbacks& callbacks) -> void {
+      callbacks.addStreamFilter(
+        std::make_shared<Http::HttpModSecurityFilter>(config, context)
+      );
     };
   }
 
   void translateHttpModSecurityFilter(const Json::Object& json_config,
-                                        modsecurity::Decoder& proto_config) {
+                                        modsecurity::ModsecurityFilterConfigDecoder& proto_config) {
 
     // normally we want to validate the json_config againts a defined json-schema here.
     JSON_UTIL_SET_STRING(json_config, proto_config, rules_path);
