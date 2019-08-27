@@ -16,10 +16,13 @@
 namespace Envoy {
 namespace Http {
 
-HttpModSecurityFilterConfig::HttpModSecurityFilterConfig(const modsecurity::ModsecurityFilterConfigDecoder& proto_config)
+HttpModSecurityFilterConfig::HttpModSecurityFilterConfig(const modsecurity::ModsecurityFilterConfigDecoder& proto_config,
+                                                         Server::Configuration::FactoryContext& context)
     : rules_path_(proto_config.rules_path()),
       rules_inline_(proto_config.rules_inline()),
-      webhook_(proto_config.webhook()) {
+      webhook_(proto_config.webhook()),
+      tls_(context.threadLocal().allocateSlot()) {
+
     modsec_.reset(new modsecurity::ModSecurity());
     modsec_->setConnectorInformation("ModSecurity-test v0.0.1-alpha (ModSecurity test)");
     modsec_->setServerLogCb(HttpModSecurityFilter::_logCb, modsecurity::RuleMessageLogProperty |
@@ -36,7 +39,6 @@ HttpModSecurityFilterConfig::HttpModSecurityFilterConfig(const modsecurity::Mods
         };
     }
     if (!rules_inline().empty()) {
-        
         int rulesLoaded = modsec_rules_->load(rules_inline().c_str());
         ENVOY_LOG(debug, "Loading ModSecurity inline rules");
         if (rulesLoaded == -1) {
@@ -45,16 +47,34 @@ HttpModSecurityFilterConfig::HttpModSecurityFilterConfig(const modsecurity::Mods
             ENVOY_LOG(info, "Loaded {} inline rules", rulesLoaded);
         };
     }
+
+    tls_->set([this, &context](Event::Dispatcher&) -> ThreadLocal::ThreadLocalObjectSharedPtr {
+      return std::make_shared<ThreadLocalWebhook>(new WebhookFetcher(context.clusterManager(), 
+                webhook_.http_uri(), 
+                webhook_.secret(), 
+                *this));
+    });
 }
 
 HttpModSecurityFilterConfig::~HttpModSecurityFilterConfig() {
 }
 
-HttpModSecurityFilter::HttpModSecurityFilter(HttpModSecurityFilterConfigSharedPtr config, Server::Configuration::FactoryContext& context)
+WebhookFetcherSharedPtr HttpModSecurityFilterConfig::webhook_fetcher() {
+    return tls_->getTyped<ThreadLocalWebhook>().webhook_fetcher_;
+}
+
+void HttpModSecurityFilterConfig::onSuccess(const Http::MessagePtr& response) {
+    ENVOY_LOG(info, "webhook success!");
+}
+void HttpModSecurityFilterConfig::onFailure(FailureReason reason) {
+    ENVOY_LOG(info, "webhook failure!");
+}
+
+
+HttpModSecurityFilter::HttpModSecurityFilter(HttpModSecurityFilterConfigSharedPtr config)
     : config_(config), intervined_(false), request_processed_(false), response_processed_(false) {
     
     modsec_transaction_.reset(new modsecurity::Transaction(config_->modsec_.get(), config_->modsec_rules_.get(), this));
-    webhook_fetcher_.reset(new WebhookFetcher(context.clusterManager(), config_->webhook().http_uri(), config_->webhook().secret(), *this));
 }
 
 HttpModSecurityFilter::~HttpModSecurityFilter() {
@@ -372,15 +392,7 @@ void HttpModSecurityFilter::logCb(const modsecurity::RuleMessage * ruleMessage) 
                     // see https://github.com/SpiderLabs/ModSecurity/commit/91daeee9f6a61b8eda07a3f77fc64bae7c6b7c36
                     ruleMessage->m_isDisruptive ? "Disruptive" : "Non-disruptive",
                     modsecurity::RuleMessage::log(ruleMessage));
-    webhook_fetcher_->invoke(getRuleMessageAsJsonString(ruleMessage));
-}
-
-
-void HttpModSecurityFilter::onSuccess(const Http::MessagePtr& response) {
-    ENVOY_LOG(info, "webhook success!");
-}
-void HttpModSecurityFilter::onFailure(FailureReason reason) {
-    ENVOY_LOG(info, "webhook failure!");
+    config_->webhook_fetcher()->invoke(getRuleMessageAsJsonString(ruleMessage));
 }
 
 } // namespace Http

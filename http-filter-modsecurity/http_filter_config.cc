@@ -46,12 +46,11 @@ public:
 private:
   Http::FilterFactoryCb createFilter(const modsecurity::ModsecurityFilterConfigDecoder& proto_config, FactoryContext& context) {
     Http::HttpModSecurityFilterConfigSharedPtr config =
-        std::make_shared<Http::HttpModSecurityFilterConfig>(
-            Http::HttpModSecurityFilterConfig(proto_config));
+        std::make_shared<Http::HttpModSecurityFilterConfig>(proto_config, context);
 
     return [config, &context](Http::FilterChainFactoryCallbacks& callbacks) -> void {
       callbacks.addStreamFilter(
-        std::make_shared<Http::HttpModSecurityFilter>(config, context)
+        std::make_shared<Http::HttpModSecurityFilter>(config)
       );
     };
   }

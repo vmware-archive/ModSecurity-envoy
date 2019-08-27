@@ -64,22 +64,14 @@ public:
    */
   void invoke(const std::string& body);
 
-  /**
-   * Cancel the running webhook.
-   */
-  void cancel();
-
-
 private:
   Upstream::ClusterManager& cm_;
   const modsecurity::HttpUri& uri_;
   const std::string secret_;
   WebhookFetcherCallback& callback_;
-
-  Http::AsyncClient::Request* request_{};
 };
 
-using WebhookFetcherPtr = std::unique_ptr<WebhookFetcher>;
+using WebhookFetcherSharedPtr = std::shared_ptr<WebhookFetcher>;
 
 } // namespace Http
 } // namespace Envoy

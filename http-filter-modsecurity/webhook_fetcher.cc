@@ -16,16 +16,7 @@ WebhookFetcher::WebhookFetcher(Upstream::ClusterManager& cm,
                               WebhookFetcherCallback& callback)
     : cm_(cm), uri_(uri), secret_(secret), callback_(callback) {}
 
-WebhookFetcher::~WebhookFetcher() { cancel(); }
-
-void WebhookFetcher::cancel() {
-  if (request_) {
-    request_->cancel();
-    ENVOY_LOG(debug, "Webhook [uri = {}]: canceled", uri_.uri());
-  }
-
-  request_ = nullptr;
-}
+WebhookFetcher::~WebhookFetcher() {}
 
 void WebhookFetcher::invoke(const std::string& body) {
   if (!cm_.get(uri_.cluster())) {
@@ -44,10 +35,10 @@ void WebhookFetcher::invoke(const std::string& body) {
   message->headers().insertContentLength().value().setInteger(body.size());
   message->body() = std::make_unique<Buffer::OwnedImpl>(body);
   ENVOY_LOG(debug, "Webhook [uri = {}]: start", uri_.uri());
-  request_ = cm_.httpAsyncClientForCluster(uri_.cluster())
-                 .send(std::move(message), *this,
-                       Http::AsyncClient::RequestOptions().setTimeout(std::chrono::milliseconds(
-                           DurationUtil::durationToMilliseconds(uri_.timeout()))));
+  cm_.httpAsyncClientForCluster(uri_.cluster())
+              .send(std::move(message), *this,
+                    Http::AsyncClient::RequestOptions().setTimeout(std::chrono::milliseconds(
+                        DurationUtil::durationToMilliseconds(uri_.timeout()))));
 }
 
 void WebhookFetcher::onSuccess(Http::MessagePtr&& response) {
@@ -61,12 +52,10 @@ void WebhookFetcher::onSuccess(Http::MessagePtr&& response) {
     callback_.onFailure(FailureReason::BadHttpStatus);
   }
 
-  request_ = nullptr;
 }
 
 void WebhookFetcher::onFailure(Http::AsyncClient::FailureReason reason) {
   ENVOY_LOG(debug, "Webhook [uri = {}]: network error {}", uri_.uri(), enumToInt(reason));
-  request_ = nullptr;
   callback_.onFailure(FailureReason::Network);
 }
 
