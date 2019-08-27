@@ -47,5 +47,6 @@ resources:
                 cluster: service2
                 timeout:
                   seconds: 3
+              secret: webhook_secret
         - name: envoy.router
           config: {}

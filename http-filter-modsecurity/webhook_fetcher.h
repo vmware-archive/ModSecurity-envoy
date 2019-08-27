@@ -11,6 +11,22 @@
 namespace Envoy {
 namespace Http {
 
+class WebhookHeaderValues {
+public:
+  const Http::LowerCaseString SignatureType{"X-Envoy-Webhook-Signature-Type"};
+  const Http::LowerCaseString SignatureValue{"X-Envoy-Webhook-Signature-Value"};
+  
+};
+
+using WebhookHeaders = ConstSingleton<WebhookHeaderValues>;
+
+class WebhookConstantValues {
+public:
+  const std::string Sha256Hmac{"HMAC-SHA256"};
+};
+
+using WebhookConstants = ConstSingleton<WebhookConstantValues>;
+
 /**
  * Failure reason.
  */
@@ -67,7 +83,7 @@ public:
 private:
   Upstream::ClusterManager& cm_;
   const modsecurity::HttpUri& uri_;
-  const std::string secret_;
+  const std::vector<uint8_t> secret_;
   WebhookFetcherCallback& callback_;
 };
 

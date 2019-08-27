@@ -6,6 +6,7 @@
 #include "common/crypto/utility.h"
 #include "common/http/headers.h"
 #include "common/http/utility.h"
+#include "common/crypto/utility.h"
 
 namespace Envoy {
 namespace Http {
@@ -14,7 +15,7 @@ WebhookFetcher::WebhookFetcher(Upstream::ClusterManager& cm,
                               const modsecurity::HttpUri& uri, 
                               const std::string& secret, 
                               WebhookFetcherCallback& callback)
-    : cm_(cm), uri_(uri), secret_(secret), callback_(callback) {}
+    : cm_(cm), uri_(uri), secret_(secret.cbegin(), secret.cend()), callback_(callback) {}
 
 WebhookFetcher::~WebhookFetcher() {}
 
@@ -34,6 +35,12 @@ void WebhookFetcher::invoke(const std::string& body) {
   message->headers().insertContentType().value().setReference(Http::Headers::get().ContentTypeValues.Json);
   message->headers().insertContentLength().value().setInteger(body.size());
   message->body() = std::make_unique<Buffer::OwnedImpl>(body);
+  if (secret_.size()) {
+    // Add digest to headers
+    message->headers().addCopy(WebhookHeaders::get().SignatureType, WebhookConstants::get().Sha256Hmac);
+    message->headers().addCopy(WebhookHeaders::get().SignatureValue, Hex::encode(Envoy::Common::Crypto::Utility::getSha256Hmac(secret_, body)));
+  }
+
   ENVOY_LOG(debug, "Webhook [uri = {}]: start", uri_.uri());
   cm_.httpAsyncClientForCluster(uri_.cluster())
               .send(std::move(message), *this,
