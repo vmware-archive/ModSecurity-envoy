@@ -1,5 +1,5 @@
 # Envoy CI
-For more details see envoy/ci/README.md
+For more details see [envoy/ci/README.md](https://github.com/envoyproxy/envoy/blob/master/ci/README.md)
 
 # Build image for Modsecurity-envoy
 
@@ -25,7 +25,7 @@ You can either use envoy-filter-example's ./ci/do_ci.sh to create a run simple b
 sudo IMAGE_NAME=envoyproxy/envoy-build-ubuntu IMAGE_ID=modsecurity_v1 ./ci/run_envoy_docker.sh './ci/do_ci.sh build'
 ```
 
-Or you can use the proxy for envoy's do_ci.sh (for more information on options see envoy/ci/do_ci.sh)
+Or you can use do_envoy_ci.sh which acts as a proxy for envoy's do_ci.sh (for more information on options see envoy/ci/do_ci.sh)
 
 ```bash
 sudo IMAGE_NAME=envoyproxy/envoy-build-ubuntu IMAGE_ID=modsecurity_v1 ./ci/run_envoy_docker.sh './ci/do_envoy_ci.sh bazel.release'
